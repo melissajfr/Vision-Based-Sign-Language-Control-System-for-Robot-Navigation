@@ -1,6 +1,6 @@
-#define BLYNK_TEMPLATE_ID "TMPL64LuxlbSY"
-#define BLYNK_TEMPLATE_NAME "Ultrasonic Monitor"
-#define BLYNK_AUTH_TOKEN "mDsmfAbkJNeKv_3wRy-yDBKb8hj4gZp0"
+#define BLYNK_TEMPLATE_ID ""
+#define BLYNK_TEMPLATE_NAME ""
+#define BLYNK_AUTH_TOKEN ""
 
 #include <WiFi.h>
 #include <BlynkSimpleEsp32.h>
@@ -10,8 +10,8 @@
 // ========================================
 
 // ========= WiFi Credentials =========
-char ssid[] = "lycoris";
-char pass[] = "1sampai8";
+char ssid[] = "";
+char pass[] = "";
 
 // ========= Motor Pins =========
 int enA = 14;
