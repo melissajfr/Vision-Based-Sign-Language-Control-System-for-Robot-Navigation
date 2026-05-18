@@ -8,8 +8,8 @@ import socket          # Socket for WiFi communication with ESP32
 # ============================================
 # CONFIGURATION
 # ============================================
-MODEL_PATH = 'sign_language_model_new.pkl' # Path to the pre-trained model file
-ESP32_IP = '10.126.210.216'                # ESP32 IP ADDRESS!
+MODEL_PATH = '' # Path to the pre-trained model file
+ESP32_IP = ''                # ESP32 IP ADDRESS!
 ESP32_PORT = 80                            # ESP32 PORT
 USE_ESP32 = True 
 
