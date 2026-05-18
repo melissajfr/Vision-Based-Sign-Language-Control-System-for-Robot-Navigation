@@ -1,7 +1,7 @@
 #define BLYNK_PRINT Serial
-#define BLYNK_TEMPLATE_ID "TMPL6Z7vl-H-C"
-#define BLYNK_TEMPLATE_NAME "Ultrasonic Monitor"
-#define BLYNK_AUTH_TOKEN "5GvyYHUb5WyAdo5sr3EJKEF5ep0DHEdw"
+#define BLYNK_TEMPLATE_ID ""
+#define BLYNK_TEMPLATE_NAME ""
+#define BLYNK_AUTH_TOKEN ""
 
 #include <WiFi.h>
 #include <BlynkSimpleEsp32.h>
@@ -11,8 +11,8 @@
 // ========================================
 
 // ========= WiFi Credentials =========
-char ssid[] = "Ilavarasan's S24+";    // ⚠️ CHANGE THIS!
-char pass[] = "ilavarasan123";         // ⚠️ CHANGE THIS!
+char ssid[] = "";    // ⚠️ CHANGE THIS!
+char pass[] = "";         // ⚠️ CHANGE THIS!
 
 // ========= Motor Pins =========
 int enA = 14; 
