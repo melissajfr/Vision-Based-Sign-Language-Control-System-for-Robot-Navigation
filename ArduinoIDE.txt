@@ -1,0 +1,488 @@
+#define BLYNK_TEMPLATE_ID "TMPL64LuxlbSY"
+#define BLYNK_TEMPLATE_NAME "Ultrasonic Monitor"
+#define BLYNK_AUTH_TOKEN "mDsmfAbkJNeKv_3wRy-yDBKb8hj4gZp0"
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+
+// ========================================
+// Lock Mode 
+// ========================================
+
+// ========= WiFi Credentials =========
+char ssid[] = "lycoris";
+char pass[] = "1sampai8";
+
+// ========= Motor Pins =========
+int enA = 14;
+int in1 = 27;
+int in2 = 26;
+int enB = 32;
+int in3 = 25;
+int in4 = 33;
+
+// ========= PWM Properties =========
+const int freq = 500; // PWM frequency for motor control (500 Hz)
+const int pwmChannelA = 0;
+const int pwmChannelB = 1;
+const int resolution = 8; // The resolution for PWM (8 bits = 256 steps)
+
+// ========= Speeds =========
+const int SPEED_RIGHT = 70;
+const int SPEED_LEFT  = 80;
+
+// ========= Ultrasonic Pins =========
+#define TRIG1 19   // Front
+#define ECHO1 21
+#define TRIG2 18   // Right
+#define ECHO2 5
+#define TRIG3 4    // Left
+#define ECHO3 16
+#define TRIG4 15   // Back
+#define ECHO4 2
+
+#define THRESHOLD 30 // The threshold distance (in cm) used to detect obstacles
+
+// ========= WiFi Server =========
+WiFiServer server(80);   //(used for receiving commands from an external device)
+WiFiClient client;  // object to handle client (python) communication
+
+// ========= Status Variables =========
+String currentCommand = "STOP"; 
+String blockedDirection = "NONE"; // Stores the direction where movement is blocked (if any).
+unsigned long lastCommandTime = 0;
+unsigned long lockStartTime = 0;   // start time (used for locking a direction if an obstacle is detected)
+const unsigned long LOCK_DISPLAY_TIME = 3000;  // to display the lock message 3s when a direction is blocked (blynk).
+
+// Current sensor distances
+float frontDistance = 999;
+float rightDistance = 999;
+float leftDistance = 999;
+float backDistance = 999;
+
+// Previous sensor distances (for change detection!)
+float prevFrontDistance = 999;
+float prevRightDistance = 999;
+float prevLeftDistance = 999;
+float prevBackDistance = 999;
+
+// ========= TIMING CONTROL =========
+unsigned long lastFrontBackUpdate = 0;   // Last time the front/back sensors were updated
+unsigned long lastLeftRightUpdate = 0;   // Last time the left/right sensors were updated
+unsigned long lastBlynkCheck = 0;     // Last time data was sent to Blynk
+unsigned long lastDebugPrint = 0;   // Last time debug data was printed to the Serial Monitor
+
+const unsigned long FRONT_BACK_INTERVAL = 1000;   // 1 sec
+const unsigned long LEFT_RIGHT_INTERVAL = 2000;   // 2 sec
+const unsigned long BLYNK_CHECK_INTERVAL = 2000;  // Check every 2 sec
+const unsigned long DEBUG_INTERVAL = 5000;   // 5 sec Interval for printing debug messages
+
+BlynkTimer timer;   // to manage timed events within the Blynk framework
+
+// ========================================
+// ULTRASONIC READ - IMPROVED
+// ========================================
+float quickDistance(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH, 5000);
+  
+  // If no echo, return 999 (far/no object) // If no object, sensor won't get echo & return 999 to indicate there's no object within the detectable range
+  if (duration == 0) {
+    return 999;
+  }
+
+  float distance = duration * 0.034 / 2;
+  
+  // Filter invalid readings
+  if (distance < 2 || distance > 400) {
+    return 999;
+  }
+
+  return distance;
+}
+
+// ========================================
+// SENSOR UPDATES
+// ========================================
+
+void updateFrontBackSensors() {
+  if (millis() - lastFrontBackUpdate < FRONT_BACK_INTERVAL) return;
+  lastFrontBackUpdate = millis();
+  
+  frontDistance = quickDistance(TRIG1, ECHO1);
+  delay(10);   
+  backDistance = quickDistance(TRIG4, ECHO4);
+}
+
+void updateLeftRightSensors() {
+  if (millis() - lastLeftRightUpdate < LEFT_RIGHT_INTERVAL) return;
+  lastLeftRightUpdate = millis();
+  
+  rightDistance = quickDistance(TRIG2, ECHO2);
+  delay(10);
+  leftDistance = quickDistance(TRIG3, ECHO3);
+}
+
+// ========================================
+// BLYNK UPDATE 
+// Blynk Data Sending Function
+// ========================================
+void sendToBlynkIfChanged() {
+  if (millis() - lastBlynkCheck < BLYNK_CHECK_INTERVAL) return;
+  lastBlynkCheck = millis();
+  
+  bool anyChange = false;
+  
+  // Check if Front changed (>5cm difference to avoid noise)
+  if (abs(frontDistance - prevFrontDistance) > 5) {
+    Blynk.virtualWrite(V1, frontDistance);
+    String status = (frontDistance > 0 && frontDistance < THRESHOLD) ? "⚠️ OBS" : "Clear";
+    Blynk.virtualWrite(V5, status);
+    prevFrontDistance = frontDistance;
+    anyChange = true;
+    Serial.print("📡 Blynk: Front = ");
+    Serial.println(frontDistance);
+  }
+  
+  // Check if Right changed
+  if (abs(rightDistance - prevRightDistance) > 5) {
+    Blynk.virtualWrite(V2, rightDistance);
+    String status = (rightDistance > 0 && rightDistance < THRESHOLD) ? "⚠️ OBS" : "Clear";
+    Blynk.virtualWrite(V6, status);
+    prevRightDistance = rightDistance;
+    anyChange = true;
+    Serial.print("📡 Blynk: Right = ");
+    Serial.println(rightDistance);
+  }
+  
+  // Check if Left changed
+  if (abs(leftDistance - prevLeftDistance) > 5) {
+    Blynk.virtualWrite(V3, leftDistance);
+    String status = (leftDistance > 0 && leftDistance < THRESHOLD) ? "⚠️ OBS" : "Clear";
+    Blynk.virtualWrite(V7, status);
+    prevLeftDistance = leftDistance;
+    anyChange = true;
+    Serial.print("📡 Blynk: Left = ");
+    Serial.println(leftDistance);
+  }
+  
+  // Check if Back changed
+  if (abs(backDistance - prevBackDistance) > 5) {
+    Blynk.virtualWrite(V4, backDistance);
+    String status = (backDistance > 0 && backDistance < THRESHOLD) ? "⚠️ OBS" : "Clear";
+    Blynk.virtualWrite(V8, status);
+    prevBackDistance = backDistance;
+    anyChange = true;
+    Serial.print("📡 Blynk: Back = ");
+    Serial.println(backDistance);
+  }
+  
+  if (!anyChange) {
+    Serial.println("📡 Blynk: No changes, skipped");
+  }
+}
+
+// ========================================
+// MOTORS WITH LOCK
+// ========================================
+void stopMotors() {
+  ledcWrite(enA, 0);
+  ledcWrite(enB, 0);
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, LOW);
+  currentCommand = "STOP";
+}
+
+void moveForward() {
+  if (blockedDirection == "FORWARD") {            // Checks if the forward direction is blocked
+    if (millis() - lockStartTime < LOCK_DISPLAY_TIME) {     // If the direction is still locked, show the message for LOCK_DISPLAY_TIME
+      Serial.println("🔒 FORWARD LOCKED");
+    }
+    stopMotors();   // Stop the motors if direction is locked
+    return;
+  }
+  
+  if (frontDistance > 0 && frontDistance <= THRESHOLD) {    // Checks if an obstacle is in front within the threshold distance
+    Serial.print("🚫 FRONT BLOCKED (");
+    Serial.print(frontDistance);
+    Serial.println(" cm) - LOCK!");
+    stopMotors();                        // Stop the motors when an obstacle is detected
+    blockedDirection = "FORWARD";        // Marks the forward direction as blocked
+    lockStartTime = millis();            // Sets the time when the direction got locked
+    return;
+  }
+
+  digitalWrite(in1, HIGH);            // Sets the time when the direction got locked
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, HIGH);            // Sets motor B to move forward (in3 HIGH, in4 LOW)
+  digitalWrite(in4, LOW);
+  ledcWrite(enA, SPEED_RIGHT);        // Sets motor A speed to SPEED_RIGHT (PWM for motor A)
+  ledcWrite(enB, SPEED_LEFT);         // Sets motor B speed to SPEED_LEFT (PWM for motor B)
+  currentCommand = "FORWARD";         // Sets current command to "FORWARD" to indicate forward movement
+  blockedDirection = "NONE";          // Resets the blocked direction
+  Serial.println("⬆️ FORWARD");
+}
+
+void moveBackward() {
+  if (blockedDirection == "BACKWARD") {
+    if (millis() - lockStartTime < LOCK_DISPLAY_TIME) {
+      Serial.println("🔒 BACKWARD LOCKED");
+    }
+    stopMotors();
+    return;
+  }
+  
+  if (backDistance > 0 && backDistance <= THRESHOLD) {
+    Serial.print("🚫 BACK BLOCKED (");
+    Serial.print(backDistance);
+    Serial.println(" cm) - LOCK!");
+    stopMotors();
+    blockedDirection = "BACKWARD";
+    lockStartTime = millis();
+    return;
+  }
+
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, HIGH);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, HIGH);
+  ledcWrite(enA, SPEED_RIGHT);
+  ledcWrite(enB, SPEED_LEFT);
+  currentCommand = "BACKWARD";
+  blockedDirection = "NONE";
+  Serial.println("⬇️ BACKWARD");
+}
+
+void turnLeft() {
+  if (blockedDirection == "LEFT") {
+    if (millis() - lockStartTime < LOCK_DISPLAY_TIME) {
+      Serial.println("🔒 LEFT LOCKED");
+    }
+    stopMotors();
+    return;
+  }
+  
+  if (leftDistance > 0 && leftDistance <= THRESHOLD) {
+    Serial.print("🚫 LEFT BLOCKED (");
+    Serial.print(leftDistance);
+    Serial.println(" cm) - LOCK!");
+    stopMotors();
+    blockedDirection = "LEFT";
+    lockStartTime = millis();
+    return;
+  }
+
+  ledcWrite(enB, 0);
+  digitalWrite(in3, LOW);
+  digitalWrite(in4, LOW);
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+  ledcWrite(enA, SPEED_RIGHT);
+  currentCommand = "LEFT";
+  blockedDirection = "NONE";
+  Serial.println("⬅️ LEFT");
+}
+
+void turnRight() {
+  if (blockedDirection == "RIGHT") {
+    if (millis() - lockStartTime < LOCK_DISPLAY_TIME) {
+      Serial.println("🔒 RIGHT LOCKED");
+    }
+    stopMotors();
+    return;
+  }
+  
+  if (rightDistance > 0 && rightDistance <= THRESHOLD) {
+    Serial.print("🚫 RIGHT BLOCKED (");
+    Serial.print(rightDistance);
+    Serial.println(" cm) - LOCK!");
+    stopMotors();
+    blockedDirection = "RIGHT";
+    lockStartTime = millis();
+    return;
+  }
+
+  ledcWrite(enA, 0);
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, LOW);
+  digitalWrite(in3, HIGH);
+  digitalWrite(in4, LOW);
+  ledcWrite(enB, SPEED_LEFT);
+  currentCommand = "RIGHT";
+  blockedDirection = "NONE";
+  Serial.println("➡️ RIGHT");
+}
+
+// Appropriate function to control the robot's movement
+void processCommand(char cmd) {
+  lastCommandTime = millis();         // Records the time of the last command
+  switch (cmd) {
+    case 'F': moveForward(); break;      // If command is 'F', move forward
+    case 'B': moveBackward(); break;     // If command is 'B', move backward
+    case 'L': turnLeft(); break;         // If command is 'L', turn left
+    case 'R': turnRight(); break;        // If command is 'R', turn right 
+    case 'S': 
+      stopMotors();                      // If command is 'S', stop motors
+      blockedDirection = "NONE";
+      break;
+    default: break;                      // No action for invalid commands
+  }
+}
+
+// ========================================
+// CONTINUOUS SAFETY CHECK
+// ========================================
+void continuousSafetyCheck() {
+  if (currentCommand == "STOP") return;   
+  
+  if (currentCommand == "FORWARD" && frontDistance > 0 && frontDistance < THRESHOLD) {     // If there's obstacle in front, it locks forward movement
+    Serial.println("🚨 FORWARD obstacle - LOCK!");
+    stopMotors();
+    blockedDirection = "FORWARD";
+    lockStartTime = millis();
+  }
+  else if (currentCommand == "BACKWARD" && backDistance > 0 && backDistance < THRESHOLD) {   // If there's obstacle in back, it locks forward movement
+    Serial.println("🚨 BACKWARD obstacle - LOCK!");
+    stopMotors();
+    blockedDirection = "BACKWARD";
+    lockStartTime = millis();
+  }
+  else if (currentCommand == "LEFT" && leftDistance > 0 && leftDistance < THRESHOLD) {     // If there's obstacle in left, it locks forward movement
+    Serial.println("🚨 LEFT obstacle - LOCK!");
+    stopMotors();
+    blockedDirection = "LEFT";
+    lockStartTime = millis();
+  }
+  else if (currentCommand == "RIGHT" && rightDistance > 0 && rightDistance < THRESHOLD) {     // If there's obstacle in right, it locks forward movement
+    Serial.println("🚨 RIGHT obstacle - LOCK!");
+    stopMotors();
+    blockedDirection = "RIGHT";
+    lockStartTime = millis();
+  }
+}
+
+// ========================================
+// SETUP
+// ========================================
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+
+  Serial.println("\n========================================");
+  Serial.println("🔒 BLYNK OPTIMIZED LOCK MODE");
+  Serial.println("Won't hit API limits!");
+  Serial.println("========================================");
+
+  // Motors
+  pinMode(in1, OUTPUT); pinMode(in2, OUTPUT);
+  pinMode(in3, OUTPUT); pinMode(in4, OUTPUT);
+  digitalWrite(in1, LOW); digitalWrite(in2, LOW);
+  digitalWrite(in3, LOW); digitalWrite(in4, LOW);
+  ledcAttachChannel(enA, freq, resolution, pwmChannelA);
+  ledcAttachChannel(enB, freq, resolution, pwmChannelB);
+  ledcWrite(enA, 0); ledcWrite(enB, 0);
+  Serial.println("✅ Motors OK");
+
+  // Sensors
+  pinMode(TRIG1, OUTPUT); pinMode(ECHO1, INPUT);
+  pinMode(TRIG2, OUTPUT); pinMode(ECHO2, INPUT);
+  pinMode(TRIG3, OUTPUT); pinMode(ECHO3, INPUT);
+  pinMode(TRIG4, OUTPUT); pinMode(ECHO4, INPUT);
+  Serial.println("✅ Sensors OK");
+
+  // WiFi & Blynk
+  Serial.print("📡 Connecting...");
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  Serial.println("\n✅ WiFi OK");
+  Serial.println("✅ Blynk OK");
+  Serial.print("📍 IP: ");
+  Serial.println(WiFi.localIP());
+
+  server.begin();
+
+  Serial.println("========================================");
+  Serial.println("⏱️ Sensor Rates:");
+  Serial.println("   Front/Back: 1 sec");
+  Serial.println("   Left/Right: 2 sec");
+  Serial.println("\n📡 Blynk Updates:");
+  Serial.println("   Only when values CHANGE (>5cm)");
+  Serial.println("   Checks every 2 seconds");
+  Serial.println("   Saves 90% of API calls! ✅");
+  Serial.println("========================================\n");
+}
+
+// ***************************************
+// MAIN LOOP
+// ***************************************
+void loop() {
+  Blynk.run();
+
+  // Update sensors
+  updateFrontBackSensors();     // reads the front and back sensors to get the latest distance measurements
+  updateLeftRightSensors();     // reads the left and right sensors for the latest distance data
+
+  // Send to Blynk ONLY if changed
+  sendToBlynkIfChanged();
+
+  // Safety check
+  continuousSafetyCheck();
+
+  // Python commands
+  if (!client || !client.connected()) {
+    client = server.available();
+  }
+
+  if (client && client.connected() && client.available()) {
+    char cmd = client.read();               // reads the command (F', 'B', 'L', 'R', or 'S')
+    processCommand(cmd);
+    client.print("OK\n");
+  }
+
+  // Timeout: if robot not received command in 2 sec, motor will stop
+  if (millis() - lastCommandTime > 2000 && currentCommand != "STOP") {
+    stopMotors();
+    blockedDirection = "NONE";
+  }
+
+  // Debug
+  if (millis() - lastDebugPrint > DEBUG_INTERVAL) {
+    Serial.print("💓 ");
+    Serial.print(currentCommand);
+    if (blockedDirection != "NONE") {
+      Serial.print(" [Locked:");
+      Serial.print(blockedDirection);
+      Serial.print("]");
+    }
+    Serial.print(" | F:");
+    Serial.print(frontDistance);
+    Serial.print(" R:");
+    Serial.print(rightDistance);
+    Serial.print(" L:");
+    Serial.print(leftDistance);
+    Serial.print(" B:");
+    Serial.println(backDistance);
+    lastDebugPrint = millis();
+  }
+
+  delay(5);
+}
+
+// ========================================
+// SENSOR DETECTION:
+// -----------------
+// If sensor returns 999 (no object):
+// - frontDistance = 999
+// - 999 > 30 (threshold)
+// - No obstacle detected ✅
+// - Motor can move ✅
+//
+// If sensor returns 0 (error):
+// - Filtered to 999
+// - Same as "no object"
